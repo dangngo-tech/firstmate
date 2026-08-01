@@ -329,7 +329,10 @@ async function requestServerCompaction(
   } catch {
     return undefined;
   }
-  if (!response.ok || signal.aborted) return undefined;
+  if (!response.ok || signal.aborted) {
+    await response.body?.cancel().catch(() => undefined);
+    return undefined;
+  }
 
   let payload: unknown;
   try {
@@ -379,7 +382,8 @@ function secretValues(auth: ResolvedAuth): string[] {
   for (const [name, value] of Object.entries(auth.headers ?? {})) {
     if (/authorization|api[-_]?key|access[-_]?token|refresh[-_]?token/i.test(name)) values.push(value);
   }
-  return values.filter((value) => value.length >= 8);
+  values.push(...Object.values(auth.env ?? {}));
+  return values.filter((value) => typeof value === "string" && value.length >= 8);
 }
 
 function redactSecrets(text: string, secrets: string[]): string {
@@ -428,7 +432,6 @@ async function bridgeToPiSummary(
       signal,
       reasoning: model.reasoning && thinkingLevel !== "off" ? thinkingLevel : undefined,
       cacheRetention: "none",
-      sessionId: uuidv7(),
       transport: "sse",
       fetch: fetchImpl,
       onPayload(payload) {

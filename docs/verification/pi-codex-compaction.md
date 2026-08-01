@@ -79,19 +79,26 @@ The probe was a one-off compatibility check and is not part of the test suite, w
 
 ## Behavioral evidence
 
-The focused lifecycle test runs the tracked extension through Pi's public `session_before_compact` registration with mocked HTTP responses and no real credentials.
+The focused test first loads the tracked extension through Pi's own installed extension loader, which proves the file resolves under Pi's jiti aliases rather than only under Node or `tsc` resolution.
+It then runs the extension through Pi's public `session_before_compact` registration with mocked HTTP responses and no real credentials.
 It covers compatible server-compaction success, both accepted opaque item types, active-tool schema forwarding and its omission for tool-free spans, rejection of foreign-provider tool payloads, non-Codex bypass, authentication failure, cancellation, endpoint failure, malformed compact output, malformed bridge output, the rate-limited operator fallback warning and the silent paths that must not raise it, repeated compaction after a fresh extension instance, previous-summary and file-list persistence, split turns, usage accounting, and all three trigger reasons.
 
 ```sh
 bin/fm-test-run.sh tests/fm-pi-codex-compaction.test.sh
 ```
 
-The verified result was:
+The verified result was, with the runner's timestamp and duration fields omitted because they vary per run:
 
 ```text
+FM_TEST_BEGIN <ts> tests/fm-pi-codex-compaction.test.sh family=pure-contract-unit expected_gate_skip=none
+ok - Pi Codex compaction extension loads through Pi's own extension loader aliases
 ok - Pi Codex compaction uses server output with safe stock fallback and restart persistence
-FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0
+FM_TEST_END <ts> tests/fm-pi-codex-compaction.test.sh exit=0 duration_ms=<ms> gate_skip=false
+FM_TEST_SUMMARY total=1 failed=0 skipped_gate=0 duration_ms=<ms>
+FM_TEST_SUMMARY_FAMILY family=pure-contract-unit count=1 duration_ms=<ms> failed=0
 ```
+
+The script is classified `pure-contract-unit` in `bin/fm-test-run.sh`; it is not on the proven-isolated list, so it runs in the serial lane.
 
 Every tracked Pi extension, including `.pi/extensions/fm-codex-compaction.ts`, is copied into the existing strict no-emit check in `tests/fm-pi-primary-types.test.sh`.
 The new extension was also checked directly with TypeScript 5.9.3 under that test's strict NodeNext options and exited zero with no diagnostics.

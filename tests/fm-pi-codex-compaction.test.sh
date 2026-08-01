@@ -14,6 +14,43 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Pi resolves extension imports through jiti aliases that cover only the pi-ai
+# root, /compat, /oauth, and /providers/all. Node/tsc resolution through
+# node_modules accepts far more, so the tracked file must be proven loadable by
+# Pi's own loader, not just by a symlinked package tree.
+run_extension_loader_tests() {
+  local out out_file status
+  if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
+    echo "skip: node or npm not found for Pi extension loader test"
+    return 0
+  fi
+  if [ ! -f "$PI_PACKAGE_DIR/dist/core/extensions/loader.js" ]; then
+    echo "skip: installed @earendil-works/pi-coding-agent loader not found"
+    return 0
+  fi
+
+  mkdir -p "$TMP_ROOT/loader"
+  out_file="$TMP_ROOT/loader/node.out"
+  FM_PI_LOADER="$PI_PACKAGE_DIR/dist/core/extensions/loader.js" FM_EXT="$EXT" \
+    node --input-type=module >"$out_file" 2>&1 <<'JS'
+import { pathToFileURL } from "node:url";
+
+const loader = await import(pathToFileURL(process.env.FM_PI_LOADER).href);
+const { extensions, errors } = await loader.loadExtensions([process.env.FM_EXT], process.cwd());
+if (errors.length > 0) {
+  throw new Error(`Pi's extension loader rejected the tracked extension: ${errors.map((entry) => String(entry.error)).join("; ")}`);
+}
+if (extensions.length !== 1) {
+  throw new Error(`Pi's extension loader produced ${extensions.length} extensions`);
+}
+JS
+  status=$?
+  out=$(<"$out_file")
+  [ "$status" -eq 0 ] || fail "Pi Codex compaction extension does not load in Pi: $out"
+  [ -z "$out" ] || fail "Pi extension loader check printed output: $out"
+  pass "Pi Codex compaction extension loads through Pi's own extension loader aliases"
+}
+
 run_extension_lifecycle_tests() {
   local fixture out out_file status
   if ! command -v node >/dev/null 2>&1 || ! command -v npm >/dev/null 2>&1; then
@@ -503,4 +540,5 @@ JS
   pass "Pi Codex compaction uses server output with safe stock fallback and restart persistence"
 }
 
+run_extension_loader_tests
 run_extension_lifecycle_tests

@@ -118,6 +118,7 @@ Extension-owned file lists are carried through repeated compactions because Pi d
 Unsupported models, missing or malformed authentication, aborts, non-HTTPS endpoints, request failures, malformed compact output, and malformed bridge summaries return no hook result, which leaves the untouched conversation to Pi's stock compaction.
 A compatible model whose remote attempt still falls back raises one fixed, non-secret operator warning at most once every ten minutes, so a permanently degraded bridge is visible without changing fallback behavior.
 Neither response bodies nor failure details are logged, opaque compaction bytes are never persisted, and the persisted bridge summary redacts resolved authorization values plus common credential forms.
+Pi loads extensions through jiti aliases that cover only `@earendil-works/pi-coding-agent` and the pi-ai root, `/compat`, `/oauth`, and `/providers/all`, so the extension derives its Responses request items from the Codex API's own request builder rather than importing a pi-ai subpath that type-checks against `node_modules` but cannot be resolved by Pi.
 [Pi Codex compaction verification](verification/pi-codex-compaction.md) owns version-scoped source and behavioral evidence for this contract.
 
 ## Runtime session backends

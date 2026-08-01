@@ -14,7 +14,6 @@ import {
   type Usage,
 } from "@earendil-works/pi-ai";
 import { openAICodexResponsesApi } from "@earendil-works/pi-ai/compat";
-import { convertResponsesMessages } from "@earendil-works/pi-ai/api/openai-responses-shared";
 import {
   convertToLlm,
   type CompactionResult,
@@ -29,8 +28,12 @@ const OPENAI_CODEX_API = "openai-codex-responses";
 const DETAILS_KIND = "firstmate-codex-server-compaction";
 const DETAILS_VERSION = 1;
 const JWT_AUTH_CLAIM = "https://api.openai.com/auth";
-const ALLOWED_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
 const RESPONSES_TOOL_TYPES = new Set(["function", "custom"]);
+// Pi's extension loader only aliases the pi-ai root, /compat, /oauth, and
+// /providers/all, so the Responses conversion must come from the Codex API's own
+// request builder rather than an unaliased pi-ai subpath. This sentinel stops
+// that builder before it can perform any network I/O.
+const CONVERSION_ONLY = "firstmate-codex-compaction: conversion-only request";
 // The live ChatGPT Codex route emits `compaction_summary`; openai-node 6.26.0 documents `compaction`.
 const COMPACTION_ITEM_TYPES = new Set(["compaction_summary", "compaction"]);
 const FALLBACK_NOTICE = "Codex server compaction unavailable; Pi's built-in compaction was used.";
@@ -245,6 +248,41 @@ function mappedReasoning(
   return effort === null ? undefined : { effort, summary: "auto" };
 }
 
+async function convertToResponsesInput(
+  model: Model<typeof OPENAI_CODEX_API>,
+  auth: ResolvedAuth,
+  messages: Parameters<typeof convertToLlm>[0],
+  signal: AbortSignal,
+): Promise<JsonRecord[] | undefined> {
+  if (signal.aborted) return undefined;
+  let converted: JsonRecord[] | undefined;
+  const controller = new AbortController();
+  const stream = openAICodexResponsesApi().streamSimple(
+    model,
+    { messages: convertToLlm(messages) },
+    {
+      apiKey: auth.apiKey,
+      headers: auth.headers,
+      env: auth.env,
+      signal: controller.signal,
+      cacheRetention: "none",
+      transport: "sse",
+      maxRetries: 0,
+      fetch: () => Promise.reject(new Error(CONVERSION_ONLY)),
+      onPayload(payload) {
+        if (isRecord(payload) && Array.isArray(payload.input)) {
+          const items = payload.input.filter(isRecord);
+          if (items.length === payload.input.length) converted = items;
+        }
+        controller.abort();
+        throw new Error(CONVERSION_ONLY);
+      },
+    },
+  );
+  await stream.result();
+  return converted && converted.length > 0 ? converted : undefined;
+}
+
 async function requestServerCompaction(
   model: Model<typeof OPENAI_CODEX_API>,
   auth: ResolvedAuth,
@@ -259,13 +297,8 @@ async function requestServerCompaction(
   const headers = buildCompactHeaders(model, auth);
   if (!url || !headers || signal.aborted) return undefined;
 
-  const llmMessages = convertToLlm(messages);
-  const converted = convertResponsesMessages(
-    model,
-    { messages: llmMessages },
-    ALLOWED_TOOL_CALL_PROVIDERS,
-    { includeSystemPrompt: false },
-  );
+  const converted = await convertToResponsesInput(model, auth, messages, signal);
+  if (!converted || signal.aborted) return undefined;
   const input: unknown[] = [];
   if (previousSummary) {
     input.push({

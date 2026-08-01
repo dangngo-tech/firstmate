@@ -44,10 +44,43 @@ The same version's [`CompactedResponse`](https://github.com/openai/openai-node/b
 Its [`ResponseCompactionItem`](https://github.com/openai/openai-node/blob/v6.26.0/src/resources/responses/responses.ts#L1604-L1649) documents opaque encrypted content and replay input shape.
 The OpenAI [conversation-state guide](https://platform.openai.com/docs/guides/conversation-state#compaction-advanced) is the public API guide linked by that version-matched SDK.
 
+## Live route evidence
+
+The source citations above describe the SDK-documented contract, not the ChatGPT Codex backend the extension actually calls, so the compact leg was probed once against the real route on 2026-08-01 with an existing local ChatGPT session.
+The probe sent synthetic single-file content invented for the probe, and only status codes, field names, item types, and value kinds were recorded; no credentials, no opaque bytes, and no session content were captured.
+
+The compact leg accepts the extension's Codex-native body, with and without a `tools` array:
+
+```text
+POST https://chatgpt.com/backend-api/codex/responses/compact
+body keys: model, input, instructions, tools, parallel_tool_calls, reasoning
+with-tools    -> 200  output item types: message, message, compaction_summary
+without-tools -> 200  output item types: message, message, compaction_summary
+response keys: created_at, id, object, output, usage
+usage keys:    input_tokens, input_tokens_details, output_tokens, output_tokens_details, total_tokens
+terminal item keys: encrypted_content (string), id, type
+```
+
+Two facts corrected the implementation.
+`parallel_tool_calls` and `reasoning` are accepted rather than rejected, which is why those Codex-native fields are retained.
+The terminal opaque item is typed `compaction_summary` on this route, not the `compaction` documented by openai-node 6.26.0, and the installed Codex 0.146.0 binary contains both strings; validating only the documented type made every real compaction fall back silently, so the extension now accepts either type.
+
+Replaying that unmodified output as the prefix of an ordinary Codex Responses request was probed on the same route family and streamed to completion:
+
+```text
+POST https://chatgpt.com/backend-api/codex/responses  -> 200
+events: response.created, response.in_progress, response.output_item.added,
+        response.content_part.added, response.output_text.delta, response.output_text.done,
+        response.content_part.done, response.output_item.done, response.completed
+```
+
+This confirms the two-leg bridge end to end: the compact leg produces an opaque item and the replay leg consumes it.
+The probe was a one-off compatibility check and is not part of the test suite, which stays credential-free.
+
 ## Behavioral evidence
 
 The focused lifecycle test runs the tracked extension through Pi's public `session_before_compact` registration with mocked HTTP responses and no real credentials.
-It covers compatible server-compaction success, non-Codex bypass, authentication failure, cancellation, endpoint failure, malformed compact output, malformed bridge output, repeated compaction after a fresh extension instance, previous-summary and file-list persistence, split turns, usage accounting, and all three trigger reasons.
+It covers compatible server-compaction success, both accepted opaque item types, active-tool schema forwarding and its omission for tool-free spans, rejection of foreign-provider tool payloads, non-Codex bypass, authentication failure, cancellation, endpoint failure, malformed compact output, malformed bridge output, the rate-limited operator fallback warning and the silent paths that must not raise it, repeated compaction after a fresh extension instance, previous-summary and file-list persistence, split turns, usage accounting, and all three trigger reasons.
 
 ```sh
 bin/fm-test-run.sh tests/fm-pi-codex-compaction.test.sh

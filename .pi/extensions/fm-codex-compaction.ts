@@ -30,6 +30,11 @@ const DETAILS_KIND = "firstmate-codex-server-compaction";
 const DETAILS_VERSION = 1;
 const JWT_AUTH_CLAIM = "https://api.openai.com/auth";
 const ALLOWED_TOOL_CALL_PROVIDERS = new Set(["openai", "openai-codex", "opencode"]);
+const RESPONSES_TOOL_TYPES = new Set(["function", "custom"]);
+// The live ChatGPT Codex route emits `compaction_summary`; openai-node 6.26.0 documents `compaction`.
+const COMPACTION_ITEM_TYPES = new Set(["compaction_summary", "compaction"]);
+const FALLBACK_NOTICE = "Codex server compaction unavailable; Pi's built-in compaction was used.";
+const FALLBACK_NOTICE_INTERVAL_MS = 10 * 60 * 1000;
 
 const SUMMARY_PROMPT = `The preceding items are server-compacted coding-session context.
 Create a structured context checkpoint that another LLM can use to continue the work.
@@ -106,6 +111,19 @@ type ResolvedAuth = {
 
 function isRecord(value: unknown): value is JsonRecord {
   return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function responsesToolsFromPayload(payload: unknown): JsonRecord[] | undefined {
+  if (!isRecord(payload) || !Array.isArray(payload.tools) || payload.tools.length === 0) return undefined;
+  const tools = payload.tools.filter(
+    (tool): tool is JsonRecord =>
+      isRecord(tool) &&
+      typeof tool.type === "string" &&
+      RESPONSES_TOOL_TYPES.has(tool.type) &&
+      typeof tool.name === "string" &&
+      tool.name.length > 0,
+  );
+  return tools.length === payload.tools.length ? tools : undefined;
 }
 
 function isCompatibleModel(model: Model<any> | undefined): model is Model<typeof OPENAI_CODEX_API> {
@@ -233,6 +251,7 @@ async function requestServerCompaction(
   messages: Parameters<typeof convertToLlm>[0],
   previousSummary: string | undefined,
   thinkingLevel: PiThinkingLevel | undefined,
+  activeTools: JsonRecord[] | undefined,
   signal: AbortSignal,
   fetchImpl: typeof globalThis.fetch,
 ): Promise<ServerCompaction | undefined> {
@@ -256,6 +275,9 @@ async function requestServerCompaction(
   }
   input.push(...converted);
 
+  const callsTools = converted.some((item) => isRecord(item) && item.type === "function_call");
+  const tools = callsTools ? activeTools : undefined;
+
   let response: Response;
   try {
     response = await fetchImpl(url, {
@@ -265,6 +287,7 @@ async function requestServerCompaction(
         model: model.id,
         input,
         instructions: "Compact this coding-session context for faithful continuation.",
+        ...(tools && tools.length > 0 ? { tools } : {}),
         parallel_tool_calls: true,
         reasoning: mappedReasoning(model, thinkingLevel),
       }),
@@ -285,7 +308,11 @@ async function requestServerCompaction(
   const output = payload.output;
   const compactionItems = output.filter(
     (item): item is JsonRecord =>
-      isRecord(item) && item.type === "compaction" && typeof item.encrypted_content === "string" && item.encrypted_content.length > 0,
+      isRecord(item) &&
+      typeof item.type === "string" &&
+      COMPACTION_ITEM_TYPES.has(item.type) &&
+      typeof item.encrypted_content === "string" &&
+      item.encrypted_content.length > 0,
   );
   if (compactionItems.length !== 1 || output[output.length - 1] !== compactionItems[0]) return undefined;
   if (!output.every(isRecord)) return undefined;
@@ -434,6 +461,22 @@ function appendFileOperations(summary: string, readFiles: string[], modifiedFile
 }
 
 export default function (pi: ExtensionAPI) {
+  let activeTools: JsonRecord[] | undefined;
+  let lastFallbackNoticeAt = 0;
+
+  const noticeFallback = (ctx: ExtensionContext, signal: AbortSignal) => {
+    if (signal.aborted) return;
+    const now = Date.now();
+    if (now - lastFallbackNoticeAt < FALLBACK_NOTICE_INTERVAL_MS) return;
+    lastFallbackNoticeAt = now;
+    ctx.ui.notify(FALLBACK_NOTICE, "warning");
+  };
+
+  pi.on("before_provider_request", (event) => {
+    const tools = responsesToolsFromPayload(event.payload);
+    if (tools) activeTools = tools;
+  });
+
   pi.on("session_before_compact", async (event, ctx) => {
     const model = ctx.model;
     if (!isCompatibleModel(model) || event.signal.aborted) return;
@@ -449,6 +492,9 @@ export default function (pi: ExtensionAPI) {
       const fetchImpl = globalThis.fetch;
       if (typeof fetchImpl !== "function") return;
 
+      const fallback = () => {
+        noticeFallback(ctx, event.signal);
+      };
       const { preparation } = event;
       let summary: string;
       let usage: Usage | undefined;
@@ -461,10 +507,11 @@ export default function (pi: ExtensionAPI) {
             preparation.messagesToSummarize,
             preparation.previousSummary,
             ctx.thinkingLevel,
+            activeTools,
             event.signal,
             fetchImpl,
           );
-          if (!compactedHistory) return;
+          if (!compactedHistory) return fallback();
           const history = await bridgeToPiSummary(
             model,
             auth,
@@ -476,7 +523,7 @@ export default function (pi: ExtensionAPI) {
             event.signal,
             fetchImpl,
           );
-          if (!history) return;
+          if (!history) return fallback();
           historyText = history.text;
           usage = history.usage;
         }
@@ -487,10 +534,11 @@ export default function (pi: ExtensionAPI) {
           preparation.turnPrefixMessages,
           undefined,
           ctx.thinkingLevel,
+          activeTools,
           event.signal,
           fetchImpl,
         );
-        if (!compactedPrefix) return;
+        if (!compactedPrefix) return fallback();
         const prefix = await bridgeToPiSummary(
           model,
           auth,
@@ -502,7 +550,7 @@ export default function (pi: ExtensionAPI) {
           event.signal,
           fetchImpl,
         );
-        if (!prefix) return;
+        if (!prefix) return fallback();
         summary = `${historyText}\n\n---\n\n**Turn Context (split turn):**\n\n${prefix.text}`;
         usage = combineUsage(usage, prefix.usage);
       } else {
@@ -512,10 +560,11 @@ export default function (pi: ExtensionAPI) {
           preparation.messagesToSummarize,
           preparation.previousSummary,
           ctx.thinkingLevel,
+          activeTools,
           event.signal,
           fetchImpl,
         );
-        if (!compacted) return;
+        if (!compacted) return fallback();
         const bridged = await bridgeToPiSummary(
           model,
           auth,
@@ -527,7 +576,7 @@ export default function (pi: ExtensionAPI) {
           event.signal,
           fetchImpl,
         );
-        if (!bridged) return;
+        if (!bridged) return fallback();
         summary = bridged.text;
         usage = bridged.usage;
       }
@@ -550,6 +599,7 @@ export default function (pi: ExtensionAPI) {
       return { compaction };
     } catch {
       // Returning no hook result is Pi's supported stock-compaction fallback.
+      noticeFallback(ctx, event.signal);
       return;
     }
   });

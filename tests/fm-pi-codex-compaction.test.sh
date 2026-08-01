@@ -69,16 +69,29 @@ const token = [
   "fixture-signature",
 ].join(".");
 
-function makeHandler() {
-  let handler;
+function makeExtension() {
+  const handlers = {};
   extension.default({
     on(event, candidate) {
-      if (event === "session_before_compact") handler = candidate;
+      handlers[event] = candidate;
     },
   });
-  if (!handler) throw new Error("extension did not register session_before_compact");
-  return handler;
+  if (!handlers.session_before_compact) throw new Error("extension did not register session_before_compact");
+  if (!handlers.before_provider_request) throw new Error("extension did not register before_provider_request");
+  return handlers;
 }
+
+function makeHandler() {
+  return makeExtension().session_before_compact;
+}
+
+const readTool = {
+  type: "function",
+  name: "read",
+  description: "Read a file.",
+  parameters: { type: "object", properties: { path: { type: "string" } } },
+  strict: false,
+};
 
 function makeMessages(label = "first") {
   return [
@@ -126,10 +139,15 @@ function preparation(overrides = {}) {
   };
 }
 
-function context({ activeModel = model, auth = { ok: true, apiKey: token }, authCounter } = {}) {
+function context({ activeModel = model, auth = { ok: true, apiKey: token }, authCounter, notices } = {}) {
   return {
     model: activeModel,
     thinkingLevel: "medium",
+    ui: {
+      notify(message, type) {
+        if (notices) notices.push({ message, type });
+      },
+    },
     modelRegistry: {
       async getApiKeyAndHeaders() {
         if (authCounter) authCounter.count += 1;
@@ -167,7 +185,7 @@ function compactPayload(label = "server") {
     object: "response.compaction",
     output: [
       { type: "message", role: "user", content: [{ type: "input_text", text: `retained ${label}` }] },
-      { type: "compaction", id: `cmp_item_${label}`, encrypted_content: `opaque-${label}` },
+      { type: "compaction_summary", id: `cmp_item_${label}`, encrypted_content: `opaque-${label}` },
     ],
     usage: {
       input_tokens: 100,
@@ -255,7 +273,7 @@ function installFetch({ summaries = [structuredSummary("success")], compact = co
   if (!calls[0].body.input.some((item) => item.type === "function_call_output")) {
     throw new Error("server compaction lost tool results");
   }
-  if (!calls[1].body.input.some((item) => item.type === "compaction")) {
+  if (!calls[1].body.input.some((item) => item.type === "compaction_summary")) {
     throw new Error("bridge request did not replay the opaque compaction item");
   }
   if (!JSON.stringify(calls[1].body.input).includes("Additional focus: Preserve exact failures")) {
@@ -396,6 +414,86 @@ function installFetch({ summaries = [structuredSummary("success")], compact = co
   if (result.compaction.usage?.totalTokens !== 370) {
     throw new Error(`split usage was not combined: ${JSON.stringify(result.compaction.usage)}`);
   }
+}
+
+// The SDK-documented `compaction` item type is accepted alongside the live
+// `compaction_summary` type the ChatGPT Codex route actually returns.
+{
+  const calls = installFetch({
+    compact: {
+      output: [
+        { type: "message", role: "user", content: [{ type: "input_text", text: "retained sdk" }] },
+        { type: "compaction", id: "cmp_item_sdk", encrypted_content: "opaque-sdk" },
+      ],
+    },
+  });
+  const result = await makeHandler()(event(), context());
+  if (!result?.compaction || calls.length !== 2) throw new Error("SDK-documented compaction item type was rejected");
+}
+
+// Active Pi tool schemas observed on Pi's provider requests are sent with the
+// compacted span whenever that span replays function calls.
+{
+  const handlers = makeExtension();
+  handlers.before_provider_request({ type: "before_provider_request", payload: { model: "gpt-5.4", tools: [readTool] } });
+  let calls = installFetch();
+  let result = await handlers.session_before_compact(event(), context());
+  if (!result?.compaction) throw new Error("tool-carrying compaction failed");
+  if (JSON.stringify(calls[0].body.tools) !== JSON.stringify([readTool])) {
+    throw new Error(`active tool schemas were not sent: ${JSON.stringify(calls[0].body.tools)}`);
+  }
+
+  calls = installFetch();
+  const toollessPreparation = preparation({
+    messagesToSummarize: [{ role: "user", content: "No tools were used here.", timestamp: 1 }],
+  });
+  result = await handlers.session_before_compact(event({ preparation: toollessPreparation }), context());
+  if (!result?.compaction) throw new Error("tool-free compaction failed");
+  if (calls[0].body.tools !== undefined) throw new Error("tool schemas were sent for a span with no function calls");
+}
+
+// Payloads that are not OpenAI Responses tool schemas never reach the endpoint.
+{
+  const handlers = makeExtension();
+  handlers.before_provider_request({
+    type: "before_provider_request",
+    payload: { tools: [{ name: "read", input_schema: { type: "object" } }] },
+  });
+  const calls = installFetch();
+  const result = await handlers.session_before_compact(event(), context());
+  if (!result?.compaction) throw new Error("foreign tool payload broke compaction");
+  if (calls[0].body.tools !== undefined) throw new Error("foreign-provider tool payload was forwarded");
+}
+
+// A compatible remote attempt that falls back warns the operator exactly once
+// per rate-limit window, without secrets or response bodies.
+{
+  const notices = [];
+  const handler = makeHandler();
+  installFetch({ failCompact: true });
+  await handler(event(), context({ notices }));
+  if (notices.length !== 1 || notices[0].type !== "warning") {
+    throw new Error(`fallback did not produce one operator warning: ${JSON.stringify(notices)}`);
+  }
+  if (notices[0].message.includes(token) || notices[0].message.includes("fixture endpoint unavailable")) {
+    throw new Error("operator warning leaked a secret or a response body");
+  }
+  installFetch({ summaries: ["unstructured bridge text"] });
+  await handler(event(), context({ notices }));
+  if (notices.length !== 1) throw new Error("operator warning was not rate limited");
+}
+
+// Incompatible models, auth failures, and cancellation stay silent because they
+// are not evidence that server compaction is broken.
+{
+  const notices = [];
+  globalThis.fetch = async () => { throw new Error("must not fetch"); };
+  await makeHandler()(event(), context({ activeModel: nonCodexModel, notices }));
+  await makeHandler()(event(), context({ auth: { ok: false, error: "fixture auth absent" }, notices }));
+  const controller = new AbortController();
+  controller.abort();
+  await makeHandler()(event({ controller }), context({ notices }));
+  if (notices.length !== 0) throw new Error(`silent paths notified the operator: ${JSON.stringify(notices)}`);
 }
 JS
   status=$?

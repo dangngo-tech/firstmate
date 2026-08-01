@@ -104,6 +104,20 @@ Each record is bound to an incarnation token minted when the task's wiring is ar
 Three rendered-text readers deliberately remain outside this contract because they answer delivery questions: the submit acknowledgement and away-mode supervisor-pane busy guard in `bin/fm-tmux-lib.sh`, and the secondmate delivery-confirmation observation in `bin/fm-pending-reply-lib.sh`.
 All are harness-scoped rather than a global pattern union, and none is a recorded worker state source.
 
+## Pi Codex server compaction
+
+The tracked `.pi/extensions/fm-codex-compaction.ts` extension intercepts Pi's public `session_before_compact` lifecycle only when the active model is resolved as provider `openai-codex` with API `openai-codex-responses` and usable Codex authentication.
+It sends the exact old-message and split-turn spans selected by Pi to the Codex `responses/compact` route, preserving Pi's first-kept entry, recent-message retention, previous checkpoint, manual or automatic trigger ownership, overflow retry ownership, cancellation signal, and pre-compaction token count.
+Pi 0.83.0 has no supported session item that can persist and replay the server's opaque encrypted `compaction` item.
+The extension therefore keeps that item in memory, replays the complete server-compacted output through one ordinary Codex Responses call that emits Pi's required structured plain-text checkpoint, and persists only that checkpoint plus non-secret bridge and file-operation metadata.
+This is a bridge over Pi's persistence boundary, not native opaque-item replay.
+Split turns use separate server compactions for old history and the oversized turn prefix before merging them in Pi's normal shape, while available usage from both server compaction and bridge generation is included in session totals.
+The public compaction hook does not expose Pi's provider-private proxy transport or selected service tier, so the compact leg uses abort-aware HTTPS fetch and prices any reported compact usage at the model's default rate; a transport failure returns to stock compaction instead of changing those private settings.
+Extension-owned file lists are carried through repeated compactions because Pi deliberately does not accumulate arbitrary hook details itself.
+Unsupported models, missing or malformed authentication, aborts, non-HTTPS endpoints, request failures, malformed compact output, and malformed bridge summaries return no hook result, which leaves the untouched conversation to Pi's stock compaction.
+Neither response bodies nor failure details are logged, opaque compaction bytes are never persisted, and the persisted bridge summary redacts resolved authorization values plus common credential forms.
+[Pi Codex compaction verification](verification/pi-codex-compaction.md) owns version-scoped source and behavioral evidence for this contract.
+
 ## Runtime session backends
 
 The runtime backend is the session-provider layer below firstmate's scripts.

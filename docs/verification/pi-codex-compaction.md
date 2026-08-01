@@ -21,7 +21,7 @@ The exact local probes were:
 printf 'pi='; pi --version
 printf 'codex='; codex --version
 codex features list | awk '$1 == "remote_compaction_v2" { print }'
-printf 'openai-node='; node -p "require('/Users/dangngo/.npm-global/lib/node_modules/@earendil-works/pi-coding-agent/node_modules/openai/package.json').version"
+printf 'openai-node='; node -p "require('$(npm root -g)/@earendil-works/pi-coding-agent/node_modules/openai/package.json').version"
 strings "$(command -v codex)" | grep -o 'responses/compact' | LC_ALL=C sort -u
 ```
 

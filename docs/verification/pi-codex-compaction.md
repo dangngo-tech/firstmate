@@ -81,7 +81,7 @@ The probe was a one-off compatibility check and is not part of the test suite, w
 
 The focused test first loads the tracked extension through Pi's own installed extension loader, which proves the file resolves under Pi's jiti aliases rather than only under Node or `tsc` resolution.
 It then runs the extension through Pi's public `session_before_compact` registration with mocked HTTP responses and no real credentials.
-It covers compatible server-compaction success, both accepted opaque item types, active-tool schema forwarding and its omission for tool-free spans, rejection of foreign-provider tool payloads, non-Codex bypass, authentication failure, cancellation, endpoint failure, malformed compact output, malformed bridge output, the rate-limited operator fallback warning and the silent paths that must not raise it, repeated compaction after a fresh extension instance, previous-summary and file-list persistence, split turns, usage accounting, and all three trigger reasons.
+It covers compatible server-compaction success, both accepted opaque item types, active-tool schema forwarding and its omission for tool-free spans, rejection of foreign-provider tool payloads, non-Codex bypass, authentication failure, cancellation, endpoint failure, malformed compact output, malformed bridge output, the one-time session disable and its single non-secret notice after a malformed bridge summary, the rate-limited operator fallback warning and the silent paths that must not raise it, repeated compaction after a fresh extension instance, previous-summary and file-list persistence, split turns, usage accounting, and all three trigger reasons.
 
 ```sh
 bin/fm-test-run.sh tests/fm-pi-codex-compaction.test.sh

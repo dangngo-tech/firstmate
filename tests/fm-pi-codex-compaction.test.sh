@@ -515,9 +515,42 @@ function installFetch({ summaries = [structuredSummary("success")], compact = co
   if (notices[0].message.includes(token) || notices[0].message.includes("fixture endpoint unavailable")) {
     throw new Error("operator warning leaked a secret or a response body");
   }
-  installFetch({ summaries: ["unstructured bridge text"] });
+  installFetch({ failCompact: true });
   await handler(event(), context({ notices }));
   if (notices.length !== 1) throw new Error("operator warning was not rate limited");
+}
+
+// One malformed bridge summary disables only this session's Codex bridge, tells
+// the operator once, and leaves later compactions entirely to Pi.
+{
+  const notices = [];
+  const handler = makeHandler();
+  let calls = installFetch({ summaries: ["unstructured bridge text"] });
+  let result = await handler(event(), context({ notices }));
+  if (result !== undefined || calls.length !== 2) throw new Error("malformed bridge output did not fall back");
+  if (notices.length !== 1 || notices[0].type !== "warning" || !notices[0].message.includes("disabled")) {
+    throw new Error(`malformed bridge did not announce the session disable: ${JSON.stringify(notices)}`);
+  }
+  if (notices[0].message.includes(token) || notices[0].message.includes("unstructured bridge text")) {
+    throw new Error("disable notice leaked a secret or a response body");
+  }
+
+  calls = installFetch();
+  result = await handler(event({ reason: "threshold" }), context({ notices }));
+  if (result !== undefined || calls.length !== 0) {
+    throw new Error("disabled bridge still attempted server compaction");
+  }
+  if (notices.length !== 1) throw new Error("disabled bridge warned the operator more than once");
+}
+
+// The disable is per session: a fresh extension instance may use the bridge again.
+{
+  const handler = makeHandler();
+  installFetch({ summaries: ["unstructured bridge text"] });
+  await handler(event(), context());
+  const calls = installFetch();
+  const result = await makeHandler()(event(), context());
+  if (!result?.compaction || calls.length !== 2) throw new Error("bridge disable leaked across sessions");
 }
 
 // Incompatible models, auth failures, and cancellation stay silent because they

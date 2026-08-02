@@ -38,6 +38,8 @@ const CONVERSION_ONLY = "firstmate-codex-compaction: conversion-only request";
 const COMPACTION_ITEM_TYPES = new Set(["compaction_summary", "compaction"]);
 const FALLBACK_NOTICE = "Codex server compaction unavailable; Pi's built-in compaction was used.";
 const FALLBACK_NOTICE_INTERVAL_MS = 10 * 60 * 1000;
+const BRIDGE_DISABLED_NOTICE =
+  "Codex server compaction is disabled for the rest of this session because its bridge summary was malformed; Pi's built-in compaction will be used from now on.";
 
 const SUMMARY_PROMPT = `The preceding items are server-compacted coding-session context.
 Create a structured context checkpoint that another LLM can use to continue the work.
@@ -105,6 +107,9 @@ type ServerCompaction = {
   output: JsonRecord[];
   usage?: Usage;
 };
+
+type BridgeSummary = { text: string; usage?: Usage };
+type BridgeOutcome = BridgeSummary | "malformed" | undefined;
 
 type ResolvedAuth = {
   apiKey: string;
@@ -408,7 +413,7 @@ async function bridgeToPiSummary(
   turnPrefix: boolean,
   signal: AbortSignal,
   fetchImpl: typeof globalThis.fetch,
-): Promise<{ text: string; usage?: Usage } | undefined> {
+): Promise<BridgeOutcome> {
   if (signal.aborted) return undefined;
   const basePrompt = turnPrefix ? TURN_PREFIX_PROMPT : SUMMARY_PROMPT;
   const focus = customInstructions && !turnPrefix ? `\n\nAdditional focus: ${customInstructions}` : "";
@@ -447,7 +452,7 @@ async function bridgeToPiSummary(
     return undefined;
   }
   const text = contentText(response.content).trim();
-  if (!text || !hasRequiredSummaryShape(text, turnPrefix)) return undefined;
+  if (!text || !hasRequiredSummaryShape(text, turnPrefix)) return "malformed";
   return {
     text: redactSecrets(text, secretValues(auth)),
     usage: combineUsage(compacted.usage, response.usage),
@@ -499,6 +504,7 @@ function appendFileOperations(summary: string, readFiles: string[], modifiedFile
 export default function (pi: ExtensionAPI) {
   let activeTools: JsonRecord[] | undefined;
   let lastFallbackNoticeAt = 0;
+  let bridgeDisabled = false;
 
   const noticeFallback = (ctx: ExtensionContext, signal: AbortSignal) => {
     if (signal.aborted) return;
@@ -508,6 +514,18 @@ export default function (pi: ExtensionAPI) {
     ctx.ui.notify(FALLBACK_NOTICE, "warning");
   };
 
+  // A summary that fails validation means the route completed and still produced
+  // unusable output, so retrying it every compaction only burns tokens.
+  const noticeBridgeFailure = (ctx: ExtensionContext, signal: AbortSignal, outcome: BridgeOutcome) => {
+    if (outcome !== "malformed" || signal.aborted) {
+      noticeFallback(ctx, signal);
+      return;
+    }
+    bridgeDisabled = true;
+    lastFallbackNoticeAt = Date.now();
+    ctx.ui.notify(BRIDGE_DISABLED_NOTICE, "warning");
+  };
+
   pi.on("before_provider_request", (event) => {
     const tools = responsesToolsFromPayload(event.payload);
     if (tools) activeTools = tools;
@@ -515,7 +533,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_before_compact", async (event, ctx) => {
     const model = ctx.model;
-    if (!isCompatibleModel(model) || event.signal.aborted) return;
+    if (bridgeDisabled || !isCompatibleModel(model) || event.signal.aborted) return;
 
     try {
       const resolved = await ctx.modelRegistry.getApiKeyAndHeaders(model);
@@ -559,7 +577,9 @@ export default function (pi: ExtensionAPI) {
             event.signal,
             fetchImpl,
           );
-          if (!history) return fallback();
+          if (!history || history === "malformed") {
+            return noticeBridgeFailure(ctx, event.signal, history);
+          }
           historyText = history.text;
           usage = history.usage;
         }
@@ -586,7 +606,9 @@ export default function (pi: ExtensionAPI) {
           event.signal,
           fetchImpl,
         );
-        if (!prefix) return fallback();
+        if (!prefix || prefix === "malformed") {
+          return noticeBridgeFailure(ctx, event.signal, prefix);
+        }
         summary = `${historyText}\n\n---\n\n**Turn Context (split turn):**\n\n${prefix.text}`;
         usage = combineUsage(usage, prefix.usage);
       } else {
@@ -612,7 +634,9 @@ export default function (pi: ExtensionAPI) {
           event.signal,
           fetchImpl,
         );
-        if (!bridged) return fallback();
+        if (!bridged || bridged === "malformed") {
+          return noticeBridgeFailure(ctx, event.signal, bridged);
+        }
         summary = bridged.text;
         usage = bridged.usage;
       }

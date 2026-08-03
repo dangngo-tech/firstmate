@@ -209,6 +209,12 @@ test_ship_modes_generate_clean_briefs() {
     assert_grep "{TASK}" "$brief" "$id: brief missing the {TASK} placeholder"
     assert_grep "mid-task \`working:\` line (including setup complete) is nonterminal" "$brief" \
       "$id: brief missing nonterminal working:/setup-complete gate protection"
+    assert_grep "Prefer the smallest implementation that satisfies accepted intent" "$brief" \
+      "$id: ship brief missing smallest-implementation guidance"
+    assert_grep "reuse existing structures, avoid dependencies and abstractions for hypothetical future needs" "$brief" \
+      "$id: ship brief missing reuse and speculative-machinery guidance"
+    assert_grep "generalize only after the current requirement demonstrates a second concrete use case" "$brief" \
+      "$id: ship brief missing the concrete-use-case threshold for generalization"
     assert_no_grep "EOF" "$brief" "$id: brief leaked a heredoc EOF marker (unterminated heredoc)"
   done
   pass "fm-brief.sh: no-mistakes/direct-PR/local-only briefs generate cleanly"

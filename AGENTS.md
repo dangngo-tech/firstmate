@@ -242,8 +242,8 @@ Route by the nature of the work against each registered secondmate scope, not by
 Keep `local-only` work in the main home.
 Send in-scope work to the fitting secondmate unless it is blocked or the captain explicitly redirects it; do not read the secondmate's chat because marked routed replies return through its status or referenced document.
 If no secondmate scope fits, use the main home or discuss creating an appropriate persistent secondmate.
-For one-off or infrequent operational work, start with the simplest direct end-to-end path.
-Do not build wrappers, control planes, policy layers, custom verifiers, or automation unless the direct path exposes a concrete blocker or repeated need that justifies the added machinery.
+Prefer the smallest direct end-to-end change that satisfies accepted intent, reusing existing structures wherever possible.
+Do not add dependencies, abstractions, wrappers, control planes, policy layers, custom verifiers, automation, or generalization for hypothetical future needs; add machinery only when the current requirement exposes a concrete blocker or demonstrates a second concrete use case.
 
 Before commissioning an investigation, consult existing reports and established evidence.
 Classify the deliverable:

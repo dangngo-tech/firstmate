@@ -39,7 +39,9 @@
 # declared-external-wait verb (FM_CLASSIFY_PAUSED_VERB, default "paused") from
 # "blocked:": pause for a known external wait expected to clear on its own,
 # blocked when firstmate must act.
-# Ship tasks include a project-memory section so durable project-intrinsic
+# Ship tasks reinforce choosing the smallest implementation that satisfies the
+# accepted intent and avoiding speculative dependencies, abstractions, or generalization.
+# They also include a project-memory section so durable project-intrinsic
 # learnings can be committed to AGENTS.md through the project's delivery path;
 # it carries the AGENTS.md authoring bar (widely useful knowledge only, pointers
 # over copied detail) and has the crewmate add the fm-ensure-agents-md.sh
@@ -375,6 +377,7 @@ If the top-level path is the primary checkout or not the worktree you were launc
 1. First action: create your branch: \`git checkout -b fm/$ID\`$SETUP2
 
 # Rules
+Prefer the smallest implementation that satisfies accepted intent: reuse existing structures, avoid dependencies and abstractions for hypothetical future needs, and generalize only after the current requirement demonstrates a second concrete use case.
 $RULE1
 2. Stay inside this worktree; modify nothing outside it.
 3. Use gh-axi for GitHub operations and chrome-devtools-axi for browser operations.

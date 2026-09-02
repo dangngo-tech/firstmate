@@ -1,0 +1,7 @@
+{
+  "memoryFiles": ["AGENTS.md"],
+  "budgetTokens": 18000,
+  "discovery": {
+    "cloneRoots": ["~/.no-mistakes/worktrees/dc5e27e5e9ac", "~/.no-mistakes-codex/worktrees/dc5e27e5e9ac"]
+  }
+}
